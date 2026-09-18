@@ -1,0 +1,8 @@
+vosk
+sounddevice
+pyttsx3
+yt-dlp
+ollama
+Pillow
+edge-tts
+pygame-ce
