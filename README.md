@@ -160,32 +160,38 @@ To enable offline intelligent conversation:
 
 ## 🏃 Running Liku
 
-### 🔄 Every Time You Turn On Your Laptop
-Everything (dependencies, Python libraries, speech models) is already permanently installed on your laptop. You **never** need to reinstall anything!
+### ⚡ How to Start Liku Automatically Whenever You Open Your Laptop
 
-Whenever you switch on or restart your laptop, you have 3 easy ways to start Liku:
+You can have Liku start up automatically in the background the moment you turn on or open your laptop, so she greets you and starts listening without typing any commands!
 
-#### 1. The Fastest Way (Double-Click):
-- Open File Explorer, navigate to `C:\Liku`.
-- Double-click [`run.bat`](file:///c:/Liku/run.bat). That's it!
+#### Option 1: One-Click Automatic Setup (Fastest)
+1. Open the folder `C:\Liku` in Windows File Explorer.
+2. Double-click **[`setup_autostart.bat`](file:///c:/Liku/setup_autostart.bat)**.
+3. *Done!* Windows will now automatically launch Liku every time your laptop starts or wakes up.
 
-#### 2. From Terminal / PowerShell:
-Open PowerShell or Command Prompt and run:
-```powershell
-cd C:\Liku
-.\run.bat
-```
-*(or `python -u liku.py`)*
-
-#### 3. ⚡ Zero-Click: Start Automatically When Windows Boots
-If you want Liku to start by itself every time you turn on your laptop:
+#### Option 2: Manual Windows Startup Setup
 1. Press `Win + R` on your keyboard to open the **Run** dialog.
-2. Type `shell:startup` and press **Enter** (this opens your Windows Startup folder).
+2. Type `shell:startup` and press **Enter** (this opens your personal Windows Startup folder).
 3. Right-click inside the folder ➔ **New ➔ Shortcut**.
-4. Browse to and select `C:\Liku\run.bat` (or paste `C:\Liku\run.bat`), then click **Finish**.
-5. *Now, whenever you power on your laptop, Liku starts automatically in the background, greets you with "Hello! I'm Liku...", and immediately begins listening for your voice commands!*
+4. In the location field, enter: `C:\Liku\run.bat`
+5. Click **Next**, name the shortcut `HeyLiku`, and click **Finish**.
 
-> **Note on Local AI (Ollama)**: If you use conversational AI, Ollama typically runs automatically in the Windows taskbar tray. If you ever exited it, simply search "Ollama" in Windows Start and open it.
+#### How to Disable Auto-Start Anytime
+If you ever want to turn off automatic startup, simply double-click **[`disable_autostart.bat`](file:///c:/Liku/disable_autostart.bat)**.
+
+---
+
+### 🔄 Manual Launch Options (If Not Using Auto-Start)
+If you prefer starting Liku manually:
+- **Fastest**: Double-click [`run.bat`](file:///c:/Liku/run.bat).
+- **Terminal / PowerShell**:
+  ```powershell
+  cd C:\Liku
+  .\run.bat
+  ```
+
+> **Note on Local AI (Ollama)**: If you use local AI chat, Ollama automatically runs in the Windows taskbar tray when your laptop boots. If it is closed, simply launch "Ollama" from your Windows Start Menu.
+
 
 
 ### 🎯 Pro-Tips for Perfect Voice Accuracy
@@ -362,6 +368,8 @@ c:\Liku\
 │   ├── graph\                 # HCLG decoding graph & phoneme dictionary
 │   └── ivector\               # Speaker adaptation vectors
 ├── run.bat                    # One-click Windows batch launcher
+├── setup_autostart.bat        # Enable auto-start on laptop boot (one-click)
+├── disable_autostart.bat      # Disable auto-start on laptop boot (one-click)
 ├── generate_liku.py           # Helper script for building/deploying assistant files
 ├── liku.py                    # Main assistant engine (audio loop, TTS, command router)
 ├── test_liku.py               # Unit test suite verifying offline command parsing
