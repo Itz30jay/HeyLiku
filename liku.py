@@ -82,15 +82,15 @@ except ImportError:
 # =============================================================================
 
 # Voice settings:
-# Choose your favorite realistic neural voice:
-#   "en-US-AnaNeural"             <- Sweet, cute youthful girl voice (Default)
-#   "en-US-AvaNeural"             <- Cheerful, energetic 23-year-old female voice
-#   "en-US-JennyNeural"           <- Friendly, natural young female assistant
+# Realistic human young female voices (early 20s):
+#   "en-US-AvaNeural"              <- Warm, sweet, expressive 20-year-old girl voice (Default, highly human-like)
+#   "en-US-EmmaNeural"             <- Soft, gentle, pretty young woman voice
+#   "en-US-JennyNeural"            <- Cheerful, friendly conversational assistant
 #   "en-IN-NeerjaExpressiveNeural" <- Expressive young Indian-English female voice
-NEURAL_VOICE = "en-US-AnaNeural"
-VOICE_PITCH = "+0Hz"    # e.g. "+5Hz" or "+10Hz" for extra cute pitch
-VOICE_SPEED = "+0%"     # Speech rate (e.g. "+0%", "+5%", "-5%")
-USE_NEURAL_VOICE = True # Uses high-definition cute voice with automatic offline fallback
+NEURAL_VOICE = "en-US-AvaNeural"
+VOICE_PITCH = "+0Hz"    # e.g. "+0Hz" or "+2Hz" for a bright, cheerful tone
+VOICE_SPEED = "+0%"     # Speech rate (e.g. "+0%", "+3%", "-3%")
+USE_NEURAL_VOICE = True # Ultra-realistic human voice with automatic offline fallback
 
 # Offline voice settings (pyttsx3 fallback)
 OFFLINE_VOICE_RATE = 185
@@ -294,13 +294,18 @@ def speak_neural(text):
         raise RuntimeError("No audio returned from neural TTS")
 
     if not pygame.mixer.get_init():
-        pygame.mixer.init()
+        pygame.mixer.init(frequency=24000)
 
     sound_file = io.BytesIO(audio_data)
     pygame.mixer.music.load(sound_file)
     pygame.mixer.music.play()
     while pygame.mixer.music.get_busy():
         pygame.time.Clock().tick(20)
+
+    try:
+        pygame.mixer.music.unload()
+    except Exception:
+        pass
 
 
 def speak_offline(text):
@@ -331,7 +336,7 @@ def speak_offline(text):
 def speak(text):
     """
     Speak the given text out loud.
-    Uses ultra-realistic cute neural voice (young female early 20s)
+    Uses ultra-realistic natural human voice (warm, expressive 20-year-old girl)
     and falls back seamlessly to offline Windows voice if needed.
     """
     global is_speaking
@@ -344,14 +349,13 @@ def speak(text):
     try:
         is_speaking = True
 
-        # 1. Try cute neural voice first (Edge-TTS)
+        # 1. Try human neural voice first (Edge-TTS)
         if USE_NEURAL_VOICE and edge_tts is not None and pygame is not None:
             try:
                 speak_neural(text)
                 return
             except Exception as e:
-                # Network unavailable or edge-tts glitch: fall back cleanly
-                pass
+                print(f"[Neural TTS notice]: {e} (using offline voice)")
 
         # 2. Offline fallback (pyttsx3 with female voice)
         speak_offline(text)

@@ -296,13 +296,13 @@ All core settings are easily configurable at the top of [`liku.py`](file:///c:/L
 
 ```python
 # Choose your favorite neural voice:
-# "en-US-AnaNeural"              <- Sweet, youthful female voice (Default)
-# "en-US-AvaNeural"              <- Cheerful, energetic voice
-# "en-US-JennyNeural"            <- Professional, natural assistant
-# "en-IN-NeerjaExpressiveNeural" <- Expressive Indian-English female voice
-NEURAL_VOICE = "en-US-AnaNeural"
-VOICE_PITCH = "+0Hz"             # e.g., "+5Hz" or "-3Hz"
-VOICE_SPEED = "+0%"              # e.g., "+5%" or "-10%"
+# "en-US-AvaNeural"              <- Warm, sweet, expressive 20-year-old girl voice (Default, ultra-realistic)
+# "en-US-EmmaNeural"             <- Soft, gentle, pretty young woman voice
+# "en-US-JennyNeural"            <- Cheerful, friendly conversational assistant
+# "en-IN-NeerjaExpressiveNeural" <- Expressive young Indian-English female voice
+NEURAL_VOICE = "en-US-AvaNeural"
+VOICE_PITCH = "+0Hz"             # e.g., "+0Hz" or "+2Hz" for bright tone
+VOICE_SPEED = "+0%"              # e.g., "+0%" or "-3%"
 USE_NEURAL_VOICE = True          # Falls back to pyttsx3 offline automatically
 ```
 
