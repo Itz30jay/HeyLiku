@@ -103,6 +103,17 @@ APP_MATCH_THRESHOLD = 0.6    # For app name fuzzy matching
 # How long to wait for a follow-up command after just saying "Hey Liku"
 FOLLOW_UP_TIMEOUT = 8  # seconds
 
+# Direct command behavior:
+# When ALLOW_DIRECT_COMMANDS = True, Liku executes actionable commands (apps, websites, YouTube, volume, screenshot)
+# directly even if you don't say "Hey Liku" first!
+ALLOW_DIRECT_COMMANDS = True
+
+# When ALLOW_AI_WITHOUT_WAKE_WORD = True, Liku answers general questions and chats with local AI
+# even without saying "Hey Liku". (Default False to avoid responding to ambient room chatter).
+ALLOW_AI_WITHOUT_WAKE_WORD = False
+
+
+
 # Ollama model name - defaults to installed model (e.g. phi3:mini or llama3.2:1b)
 OLLAMA_MODEL = "phi3:mini"
 
@@ -434,7 +445,10 @@ def check_wake_word(text):
     if not words:
         return (False, "")
 
-    liku_variants = ["liku", "leeku", "liko", "leku", "liqu", "leko", "lyku", "licoo"]
+    liku_variants = [
+        "liku", "leeku", "liko", "leku", "liqu", "leko", "lyku", "licoo",
+        "like", "look", "lake", "leak", "luck", "luka", "lock", "lego", "leek", "link", "lico", "licu"
+    ]
     greetings = ["hey", "hi", "hai", "hello", "ok", "okay", "yo", "ay", "ae"]
 
     def is_liku(w):
@@ -452,13 +466,13 @@ def check_wake_word(text):
             cmd = " ".join(words[:i] + words[i + 2:]).strip()
             return (True, cmd)
 
-    # Case 1: Greeting + Liku anywhere in text
+    # Case 1: Greeting + Liku anywhere in text (e.g. "hey liku open youtube", "hey like open youtube")
     for i in range(len(words) - 1):
         if is_greeting(words[i]) and is_liku(words[i + 1]):
             cmd = " ".join(words[:i] + words[i + 2:]).strip()
             return (True, cmd)
 
-    # Case 2: Standalone Liku at the very start (e.g. "liku open youtube")
+    # Case 2: Standalone Liku at the very start (e.g. "liku open youtube", "like open vs code")
     if is_liku(words[0]):
         cmd = " ".join(words[1:]).strip()
         return (True, cmd)
@@ -478,7 +492,7 @@ def check_wake_word(text):
 def is_direct_command(command):
     """
     Check if a spoken phrase is a clear, actionable command.
-    Allows users to say e.g. 'open youtube' or 'volume up' without
+    Allows users to say e.g. 'open youtube', 'open vs code', or 'volume up' without
     needing to repeat the wake word if they forgot it.
     """
     cmd = command.lower().strip()
@@ -488,28 +502,32 @@ def is_direct_command(command):
     if extract_youtube_query(cmd) is not None:
         return True
 
-    # 2. Opening apps or websites
+    # 2. Direct app or website name alone (e.g. "vs code", "chrome", "notepad", "calculator", "spotify")
+    if cmd in APPS or cmd in WEBSITES:
+        return True
+
+    # 3. Opening apps or websites
     if re.match(r"^(?:open|turn\s+on|launch|start|run|go\s+to|visit)\s+", cmd):
         return True
 
-    # 3. Google search
+    # 4. Google search
     if re.match(r"^(?:search\s+google|google\s+search|search\s+for|google)\s+", cmd):
         return True
 
-    # 4. Closing apps
-    if re.match(r"^(?:close|kill|shut\s+down)\s+", cmd):
+    # 5. Closing apps
+    if re.match(r"^(?:close|kill|shut\s+down|exit)\s+", cmd):
         return True
 
-    # 5. Media & volume
+    # 6. Media & volume
     if any(cmd.startswith(v) for v in ["volume up", "volume down", "mute", "unmute"]):
         return True
-    if cmd in ["pause", "resume", "play", "stop", "exit", "quit", "goodbye", "next", "previous"]:
+    if cmd in ["pause", "resume", "play", "stop", "exit", "quit", "goodbye", "next", "previous", "skip"]:
         return True
 
-    # 6. Utilities
+    # 7. Utilities
     if "screenshot" in cmd or "screen shot" in cmd:
         return True
-    if "lock" in cmd and ("computer" in cmd or "pc" in cmd or "screen" in cmd):
+    if "lock" in cmd and ("computer" in cmd or "pc" in cmd or "screen" in cmd or "system" in cmd):
         return True
     if "time" in cmd and ("what" in cmd or "tell" in cmd or "current" in cmd):
         return True
@@ -1033,9 +1051,22 @@ def process_command(command):
         google_search(match.group(1).strip())
         return True
 
-    # ----- 7. OPEN WEBSITE -----
-    # Check this BEFORE apps so "open google" opens the website
-    open_match = re.match(r"(?:open|go\s+to|visit|turn\s+on|launch)\s+(?:the\s+)?(.+)", command)
+    # ----- 7. DIRECT WEBSITE OR APP NAME (e.g. "youtube", "chrome", "vs code", "notepad") -----
+    site = find_website(command)
+    if site and command in WEBSITES:
+        url, matched_name = site
+        speak(f"Opening {matched_name}.")
+        open_url(url)
+        return True
+
+    app = find_app(command)
+    if app and command in APPS:
+        cmd, matched_name = app
+        open_app(matched_name)
+        return True
+
+    # ----- 8. OPEN WEBSITE (WITH 'OPEN', 'GO TO', 'LAUNCH') -----
+    open_match = re.match(r"(?:open|go\s+to|visit|turn\s+on|launch|start|run)\s+(?:the\s+)?(.+)", command)
     if open_match:
         target = open_match.group(1).strip()
         website = find_website(target)
@@ -1045,13 +1076,13 @@ def process_command(command):
             open_url(url)
             return True
 
-    # ----- 8. CLOSE APP -----
-    close_match = re.match(r"close\s+(.+)", command)
+    # ----- 9. CLOSE APP -----
+    close_match = re.match(r"(?:close|kill|shut\s+down|exit)\s+(.+)", command)
     if close_match:
         close_app(close_match.group(1).strip())
         return True
 
-    # ----- 9. OPEN APP -----
+    # ----- 10. OPEN APP (WITH 'OPEN', 'LAUNCH') -----
     if open_match:
         # We already checked websites above, so this is an app
         open_app(open_match.group(1).strip())
@@ -1074,6 +1105,20 @@ def process_command(command):
     return True
 
 
+def clear_audio_queue(audio_q, recog=None):
+    """Discard all queued audio packets and reset Kaldi recognizer state."""
+    while not audio_q.empty():
+        try:
+            audio_q.get_nowait()
+        except queue.Empty:
+            break
+    if recog is not None:
+        try:
+            recog.Reset()
+        except Exception:
+            pass
+
+
 # =============================================================================
 # MAIN LOOP - Listens to the microphone and processes commands
 # =============================================================================
@@ -1081,7 +1126,7 @@ def process_command(command):
 def main():
     """
     Main function: loads the Vosk model, opens the microphone,
-    and listens continuously for the wake word "Hey Liku".
+    and listens continuously for the wake word "Hey Liku" or direct commands.
     """
     global is_speaking
 
@@ -1183,21 +1228,13 @@ def main():
                     if wake_detected:
                         if remaining_command:
                             # Command came with the wake word
-                            # e.g., "Hey Liku open vs code"
+                            # e.g., "Hey Liku open vs code" or "Hey like open youtube"
                             running = process_command(remaining_command)
+                            clear_audio_queue(audio_queue, recognizer)
                         else:
                             # Just the wake word - wait for the command
                             speak("Yes?")
-
-                            # Clear the audio queue (discard Liku's own voice)
-                            while not audio_queue.empty():
-                                try:
-                                    audio_queue.get_nowait()
-                                except queue.Empty:
-                                    break
-
-                            # Reset recognizer state to avoid leftover audio
-                            recognizer.Reset()
+                            clear_audio_queue(audio_queue, recognizer)
 
                             # Wait up to 8 seconds for a follow-up command
                             print("[Waiting for command...]")
@@ -1238,18 +1275,19 @@ def main():
                                     speak("I didn't hear a command. "
                                           "Say Hey Liku again when you're ready.")
 
-                            # Clear queue again after processing
-                            while not audio_queue.empty():
-                                try:
-                                    audio_queue.get_nowait()
-                                except queue.Empty:
-                                    break
-                            recognizer.Reset()
+                            clear_audio_queue(audio_queue, recognizer)
 
-                    elif is_direct_command(text):
-                        # Direct command detected without wake word (e.g. "open youtube", "volume up")
+                    elif ALLOW_DIRECT_COMMANDS and is_direct_command(text):
+                        # Direct command detected without wake word (e.g. "open youtube", "open vs code", "volume up")
                         print(f"[Direct command]: '{text}'")
                         running = process_command(text)
+                        clear_audio_queue(audio_queue, recognizer)
+
+                    elif ALLOW_AI_WITHOUT_WAKE_WORD and len(text.split()) >= 2:
+                        # Direct AI question or prompt without wake word
+                        print(f"[Direct AI Query]: '{text}'")
+                        running = process_command(text)
+                        clear_audio_queue(audio_queue, recognizer)
 
             except KeyboardInterrupt:
                 print("\nInterrupted by user.")

@@ -228,6 +228,32 @@ def test_find_website_not_found():
     print("PASS: find_website('xyznonexistentsite123') -> None")
 
 
+def test_wake_word_hey_like():
+    """Test: 'hey like open youtube' and 'hey like open vs code' (speech recognition variations)."""
+    detected, cmd = check_wake_word("hey like open youtube")
+    assert detected is True, f"Failed detecting 'hey like'! Got: {detected}"
+    assert cmd == "open youtube", f"Wrong command! Got: '{cmd}'"
+
+    detected2, cmd2 = check_wake_word("hey like open vs code")
+    assert detected2 is True, f"Failed detecting 'hey like'! Got: {detected2}"
+    assert cmd2 == "open vs code", f"Wrong command! Got: '{cmd2}'"
+    print("PASS: 'hey like open ...' phonetic variants recognized")
+
+
+def test_direct_commands_extended():
+    """Test: direct commands work without any wake word."""
+    assert is_direct_command("open vs code") is True
+    assert is_direct_command("open youtube") is True
+    assert is_direct_command("open chrome") is True
+    assert is_direct_command("vs code") is True
+    assert is_direct_command("chrome") is True
+    assert is_direct_command("notepad") is True
+    assert is_direct_command("youtube") is True
+    assert is_direct_command("volume up") is True
+    assert is_direct_command("screenshot") is True
+    print("PASS: extended direct commands recognized without wake word")
+
+
 # =============================================================================
 # RUN ALL TESTS
 # =============================================================================
@@ -243,8 +269,10 @@ def run_all_tests():
         test_wake_word_fuzzy_leeku,
         test_wake_word_fuzzy_liko,
         test_wake_word_fuzzy_like_you,
+        test_wake_word_hey_like,
         test_wake_word_no_match,
         test_is_direct_command,
+        test_direct_commands_extended,
         test_is_not_direct_command,
         test_normalize_command,
         test_youtube_turn_on_and_play,
