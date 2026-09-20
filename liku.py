@@ -1,12 +1,13 @@
 """
-Liku - A free, offline voice assistant for Windows.
+Liku - A free voice assistant for Windows.
 
 This is the main file. It listens for the wake word "Hey Liku",
 then processes your voice command: opening apps, playing YouTube,
 controlling volume, chatting with a local AI, and more.
 
-Everything runs locally on your PC. No paid APIs or subscriptions needed.
-Only YouTube search uses the internet.
+Uses Google's free Speech Recognition for accurate voice understanding
+(same engine as Google Search voice input — no API key needed).
+Falls back to Vosk offline recognition when there's no internet.
 
 Author: Built with love for beginners.
 """
@@ -76,24 +77,40 @@ try:
 except ImportError:
     yt_dlp = None  # YouTube search won't work, but everything else will
 
+try:
+    import speech_recognition as sr
+except ImportError:
+    sr = None  # Google Speech Recognition won't work, Vosk will be used instead
+
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
 # Voice settings:
-# Realistic human young female voices (early 20s):
-#   "en-US-AvaNeural"              <- Warm, sweet, expressive 20-year-old girl voice (Default, highly human-like)
+# Realistic human young female voices:
+#   "en-IN-NeerjaExpressiveNeural" <- Expressive young Indian-English female voice (Default)
+#   "en-US-AvaNeural"              <- Warm, sweet, expressive American girl voice
 #   "en-US-EmmaNeural"             <- Soft, gentle, pretty young woman voice
 #   "en-US-JennyNeural"            <- Cheerful, friendly conversational assistant
-#   "en-IN-NeerjaExpressiveNeural" <- Expressive young Indian-English female voice
-NEURAL_VOICE = "en-US-AvaNeural"
-VOICE_PITCH = "+0Hz"    # e.g. "+0Hz" or "+2Hz" for a bright, cheerful tone
-VOICE_SPEED = "+0%"     # Speech rate (e.g. "+0%", "+3%", "-3%")
+NEURAL_VOICE = "en-IN-NeerjaExpressiveNeural"  # Pretty, warm expressive Indian-English girl
+VOICE_PITCH = "+2Hz"    # Slightly bright, cheerful tone
+VOICE_SPEED = "-3%"     # Slightly slower for clarity and a more natural feel
 USE_NEURAL_VOICE = True # Ultra-realistic human voice with automatic offline fallback
 
+# Multi-language voice settings
+# Hindi: warm female voice
+HINDI_VOICE = "hi-IN-SwaraNeural"
+HINDI_PITCH = "+2Hz"
+HINDI_SPEED = "-3%"
+
+# Odia: female voice
+ODIA_VOICE = "or-IN-SubhasiniNeural"
+ODIA_PITCH = "+2Hz"
+ODIA_SPEED = "-3%"
+
 # Offline voice settings (pyttsx3 fallback)
-OFFLINE_VOICE_RATE = 185
+OFFLINE_VOICE_RATE = 175
 OFFLINE_VOICE_VOLUME = 1.0
 
 # How similar a word must be to count as a match (0.0 to 1.0)
@@ -103,13 +120,11 @@ APP_MATCH_THRESHOLD = 0.6    # For app name fuzzy matching
 # How long to wait for a follow-up command after just saying "Hey Liku"
 FOLLOW_UP_TIMEOUT = 8  # seconds
 
-# Direct command behavior:
-# When ALLOW_DIRECT_COMMANDS = True, Liku executes actionable commands (apps, websites, YouTube, volume, screenshot)
-# directly even if you don't say "Hey Liku" first!
-ALLOW_DIRECT_COMMANDS = True
+# Wake word requirement:
+# When ALLOW_DIRECT_COMMANDS = False, Liku strictly requires every command to start with "Hey Liku" or "Liku"!
+ALLOW_DIRECT_COMMANDS = False
 
-# When ALLOW_AI_WITHOUT_WAKE_WORD = True, Liku answers general questions and chats with local AI
-# even without saying "Hey Liku". (Default False to avoid responding to ambient room chatter).
+# When ALLOW_AI_WITHOUT_WAKE_WORD = False, Liku never responds to ambient room speech unless addressed with wake word.
 ALLOW_AI_WITHOUT_WAKE_WORD = False
 
 
@@ -117,10 +132,18 @@ ALLOW_AI_WITHOUT_WAKE_WORD = False
 # Ollama model name - defaults to installed model (e.g. phi3:mini or llama3.2:1b)
 OLLAMA_MODEL = "phi3:mini"
 
-# Vosk audio settings
-SAMPLE_RATE = 16000   # 16 kHz as required by Vosk
+# Audio settings
+SAMPLE_RATE = 16000   # 16 kHz sample rate
 CHANNELS = 1          # Mono audio
 BLOCK_SIZE = 8000     # Audio block size (0.5 seconds of audio)
+
+# Google Speech Recognition language codes
+# These map Liku's current_language to Google's language codes for accurate recognition
+GOOGLE_LANG_CODES = {
+    "english": "en-IN",   # Indian English — best for Indian accent
+    "hindi":   "hi-IN",   # Hindi recognition
+    "odia":    "or-IN",   # Odia recognition
+}
 
 
 # =============================================================================
@@ -258,25 +281,71 @@ is_speaking = False
 # Chat history for the AI (keeps the last 12 messages for context)
 chat_history = []
 
+# Current language for Liku's responses: "english", "hindi", "odia"
+current_language = "english"
+
 # System prompt that tells the AI how to behave
 SYSTEM_PROMPT = (
     "You are Liku, a friendly voice assistant. "
     "Reply in one to three short sentences, plain text only, no lists or markdown."
 )
 
+# Language-specific greetings and phrases
+LANG_PHRASES = {
+    "english": {
+        "switched":   "Okay! I'll speak in English now.",
+        "yes":        "Yes?",
+        "goodbye":    "Goodbye! Have a great day!",
+        "no_command": "I didn't hear a command. Say Hey Liku again when you're ready.",
+        "hello":      "Hello! I'm Liku, your voice assistant. Say Hey Liku to wake me up!",
+    },
+    "hindi": {
+        "switched":   "Theek hai! Ab main Hindi mein baat karungi.",
+        "yes":        "Haan, bolo?",
+        "goodbye":    "Alvida! Aapka din achha rahe!",
+        "no_command": "Maine koi command nahi suni. Phir se Hey Liku boliye.",
+        "hello":      "Namaste! Main Liku hoon, aapki voice assistant. Hey Liku bolke mujhe jagaiye!",
+    },
+    "odia": {
+        "switched":   "Thik acha! Mun Odia re kathah kahibi.",
+        "yes":        "Hain, bolanti?",
+        "goodbye":    "Vidai! Aapanka dina bhalha hagatu!",
+        "no_command": "Mun kichi command shuninahin. Pheri Hey Liku bolanti.",
+        "hello":      "Namaskar! Mun Liku, aapanka voice assistant. Hey Liku boli mote jaganti!",
+    },
+}
+
 
 # =============================================================================
 # VOICE OUTPUT - Text to Speech
 # =============================================================================
 
-def speak_neural(text):
-    """Speak using Edge-TTS high-definition cute neural voice."""
+def speak_neural(text, voice=None, pitch=None, rate=None):
+    """Speak using Edge-TTS high-definition neural voice — pretty, expressive girl voice."""
+    # Select voice/pitch/rate based on current language if not overridden
+    if voice is None:
+        if current_language == "hindi":
+            voice = HINDI_VOICE
+            pitch = pitch or HINDI_PITCH
+            rate  = rate  or HINDI_SPEED
+        elif current_language == "odia":
+            voice = ODIA_VOICE
+            pitch = pitch or ODIA_PITCH
+            rate  = rate  or ODIA_SPEED
+        else:
+            voice = NEURAL_VOICE
+            pitch = pitch or VOICE_PITCH
+            rate  = rate  or VOICE_SPEED
+    else:
+        pitch = pitch or VOICE_PITCH
+        rate  = rate  or VOICE_SPEED
+
     async def _generate():
         communicate = edge_tts.Communicate(
             text,
-            NEURAL_VOICE,
-            pitch=VOICE_PITCH,
-            rate=VOICE_SPEED,
+            voice,
+            pitch=pitch,
+            rate=rate,
         )
         audio_data = bytearray()
         async for chunk in communicate.stream():
@@ -336,8 +405,8 @@ def speak_offline(text):
 def speak(text):
     """
     Speak the given text out loud.
-    Uses ultra-realistic natural human voice (warm, expressive 20-year-old girl)
-    and falls back seamlessly to offline Windows voice if needed.
+    Uses the pretty neural voice selected for the current language (English/Hindi/Odia).
+    Falls back to offline Windows voice if Edge-TTS is unavailable.
     """
     global is_speaking
 
@@ -349,9 +418,18 @@ def speak(text):
     try:
         is_speaking = True
 
-        # 1. Try human neural voice first (Edge-TTS)
+        # 1. Try neural voice first (Edge-TTS) — pretty girl voice
         if USE_NEURAL_VOICE and edge_tts is not None and pygame is not None:
             try:
+                # Try Odia fallback to Hindi if Odia voice is unavailable
+                if current_language == "odia":
+                    try:
+                        speak_neural(text)
+                        return
+                    except Exception:
+                        # Odia voice may not be available — fall back to Hindi
+                        speak_neural(text, voice=HINDI_VOICE, pitch=HINDI_PITCH, rate=HINDI_SPEED)
+                        return
                 speak_neural(text)
                 return
             except Exception as e:
@@ -364,6 +442,13 @@ def speak(text):
         print(f"[Speech error]: {e}")
     finally:
         is_speaking = False
+
+
+def phrase(key):
+    """Return the current-language phrase for a given key (e.g. 'yes', 'goodbye')."""
+    return LANG_PHRASES.get(current_language, LANG_PHRASES["english"]).get(
+        key, LANG_PHRASES["english"].get(key, "")
+    )
 
 
 # =============================================================================
@@ -430,12 +515,13 @@ def normalize_command(command):
 
 def check_wake_word(text):
     """
-    Check if the text contains the wake word (with fuzzy matching and greetings).
-    Supports wake word at the beginning, at the end, or alone.
+    Check if the command starts with the wake word ("Hey Liku", "Liku", etc.)
+    Strictly requires the wake word at the beginning of the command.
+    If the spoken phrase does not start with 'Hey Liku' or 'Liku', Liku will not trigger.
 
-    Accepts:
-      'hey liku', 'hi liku', 'hello liku', 'ok liku', 'liku' (as first/last word),
-      and variants like 'leeku', 'liko', 'like you'.
+    Accepts at start:
+      'hey liku', 'hi liku', 'hello liku', 'ok liku', 'liku',
+      'namaste liku', 'suno liku', 'are liku', and phonetic variants like 'leeku', 'like you'.
     """
     text = text.lower().strip()
     if not text:
@@ -444,6 +530,7 @@ def check_wake_word(text):
     # Normalize speech recognition text first
     text = re.sub(r"\b(you\s+tube|u\s+tube)\b", "youtube", text)
     text = re.sub(r"\b(v\s+s\s+code|visual\s+studio\s+code)\b", "vs code", text)
+    text = re.sub(r"\bnote\s+pad\b", "notepad", text)
 
     words = text.split()
     if not words:
@@ -453,7 +540,10 @@ def check_wake_word(text):
         "liku", "leeku", "liko", "leku", "liqu", "leko", "lyku", "licoo",
         "like", "look", "lake", "leak", "luck", "luka", "lock", "lego", "leek", "link", "lico", "licu"
     ]
-    greetings = ["hey", "hi", "hai", "hello", "ok", "okay", "yo", "ay", "ae"]
+    greetings = [
+        "hey", "hi", "hai", "hello", "ok", "okay", "yo", "ay", "ae", "he",
+        "namaste", "namaskar", "suno", "sun", "are", "bhai"
+    ]
 
     def is_liku(w):
         return any(difflib.SequenceMatcher(None, w, v).ratio() >= WAKE_WORD_THRESHOLD for v in liku_variants)
@@ -461,35 +551,28 @@ def check_wake_word(text):
     def is_greeting(w):
         return any(difflib.SequenceMatcher(None, w, g).ratio() >= 0.65 for g in greetings)
 
-    # Check for two-word "like you" (sounds like "liku")
-    for i in range(len(words) - 1):
-        if difflib.SequenceMatcher(None, words[i] + " " + words[i + 1], "like you").ratio() >= 0.75:
-            if i > 0 and is_greeting(words[i - 1]):
-                cmd = " ".join(words[:i - 1] + words[i + 2:]).strip()
-                return (True, cmd)
-            cmd = " ".join(words[:i] + words[i + 2:]).strip()
+    # 1. Greeting + "like you" at start (e.g. "hey like you open notepad...")
+    if len(words) >= 3 and is_greeting(words[0]):
+        if difflib.SequenceMatcher(None, words[1] + " " + words[2], "like you").ratio() >= 0.75:
+            cmd = " ".join(words[3:]).strip()
             return (True, cmd)
 
-    # Case 1: Greeting + Liku anywhere in text (e.g. "hey liku open youtube", "hey like open youtube")
-    for i in range(len(words) - 1):
-        if is_greeting(words[i]) and is_liku(words[i + 1]):
-            cmd = " ".join(words[:i] + words[i + 2:]).strip()
-            return (True, cmd)
+    # 2. "like you" at start (e.g. "like you write any program...")
+    if len(words) >= 2 and difflib.SequenceMatcher(None, words[0] + " " + words[1], "like you").ratio() >= 0.75:
+        cmd = " ".join(words[2:]).strip()
+        return (True, cmd)
 
-    # Case 2: Standalone Liku at the very start (e.g. "liku open youtube", "like open vs code")
+    # 3. Greeting + Liku at start (e.g. "hey liku open notepad and write a python program...")
+    if len(words) >= 2 and is_greeting(words[0]) and is_liku(words[1]):
+        cmd = " ".join(words[2:]).strip()
+        return (True, cmd)
+
+    # 4. Standalone Liku at start (e.g. "liku write any program in notepad")
     if is_liku(words[0]):
         cmd = " ".join(words[1:]).strip()
         return (True, cmd)
 
-    # Case 3: Standalone Liku at the very end (e.g. "open youtube liku")
-    if is_liku(words[-1]):
-        cmd = " ".join(words[:-1]).strip()
-        return (True, cmd)
-
-    # Case 4: Wake word alone
-    if len(words) == 1 and is_liku(words[0]):
-        return (True, "")
-
+    # If it does not start with Liku or Hey Liku, do not trigger
     return (False, "")
 
 
@@ -935,6 +1018,213 @@ def close_app(name):
 
 
 # =============================================================================
+# LANGUAGE DETECTION
+# =============================================================================
+
+def detect_language_command(command):
+    """
+    Detect if the user is asking Liku to switch language.
+    Returns the new language string ('english', 'hindi', 'odia') or None.
+
+    Supported phrases:
+      English: 'speak english', 'switch to english', 'use english', 'english mode'
+      Hindi:   'speak hindi', 'speak in hindi', 'switch to hindi', 'hindi mein bolo'
+      Odia:    'speak odia', 'speak in odia', 'switch to odia', 'odia re bola'
+    """
+    cmd = command.lower().strip()
+
+    hindi_triggers = [
+        "speak hindi", "speak in hindi", "switch to hindi", "use hindi",
+        "hindi mein", "hindi me bolo", "hindi mode", "change to hindi",
+        "talk in hindi", "respond in hindi", "answer in hindi",
+    ]
+    odia_triggers = [
+        "speak odia", "speak in odia", "switch to odia", "use odia",
+        "odia re", "odia te bola", "odia mode", "change to odia",
+        "talk in odia", "respond in odia", "answer in odia",
+    ]
+    english_triggers = [
+        "speak english", "speak in english", "switch to english", "use english",
+        "english mode", "change to english", "talk in english",
+        "respond in english", "answer in english",
+    ]
+
+    for t in hindi_triggers:
+        if t in cmd:
+            return "hindi"
+    for t in odia_triggers:
+        if t in cmd:
+            return "odia"
+    for t in english_triggers:
+        if t in cmd:
+            return "english"
+
+    return None
+
+
+# =============================================================================
+# CODE WRITING (Ollama generates code, saved to Desktop, opened in VS Code)
+# =============================================================================
+
+def is_code_request(command):
+    """
+    Returns True if the command is a request to write/generate code.
+    Examples:
+      - 'open note pad and write a python program to find out prime no from a given string'
+      - 'write any program in notepad'
+      - 'write a program to calculate factorial'
+      - 'create a python script to download files'
+    """
+    cmd = command.lower().strip()
+    cmd = re.sub(r"\bnote\s+pad\b", "notepad", cmd)
+
+    patterns = [
+        r"\b(?:write|create|make|generate|type)\b.*?\b(?:program|code|script|python)\b",
+        r"\b(?:program|code|script)\b.*?\b(?:in\s+notepad|on\s+notepad)\b",
+        r"\bopen\s+notepad\s+and\s+(?:write|type|create|make|code)\b",
+        r"\bcode\s+for\b",
+        r"\bpython\s+code\b",
+    ]
+    if any(re.search(p, cmd) for p in patterns):
+        return True
+
+    triggers = [
+        "write a program", "write program", "write any program", "write code", "write a code",
+        "create a program", "create program", "create a script", "create script",
+        "make a program", "make program", "make a script",
+        "code for", "python code", "write python", "generate code",
+        "write a python", "write script", "write a script",
+    ]
+    return any(t in cmd for t in triggers)
+
+
+def extract_clean_code(text):
+    """
+    Extract pure Python code from model output, handling markdown code fences
+    or returning raw code lines cleanly.
+    """
+    if not text:
+        return ""
+    # Try finding fenced block ```python ... ``` or ``` ... ```
+    match = re.search(r"```(?:python)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if match and match.group(1).strip():
+        return match.group(1).strip()
+
+    # If no fences, remove conversational preamble before code
+    lines = text.strip().splitlines()
+    code_lines = []
+    started = False
+    for line in lines:
+        stripped = line.strip()
+        if not started:
+            if stripped.startswith(("import ", "from ", "def ", "class ", "#", "print(", "if __name__")):
+                started = True
+                code_lines.append(line)
+        else:
+            code_lines.append(line)
+
+    if code_lines:
+        return "\n".join(code_lines).strip()
+    return text.strip()
+
+
+def write_code(command):
+    """
+    Ask Ollama to generate code based on the user's description.
+    Saves the code to Desktop and opens it in Notepad (or VS Code if requested).
+    """
+    global chat_history
+
+    if ollama is None:
+        speak("The ollama package is not installed. Please run pip install ollama.")
+        return
+
+    cmd_lower = command.lower().strip()
+    cmd_lower = re.sub(r"\bnote\s+pad\b", "notepad", cmd_lower)
+
+    # Determine editor: Default to Notepad, unless VS Code explicitly asked
+    use_vscode = ("vs code" in cmd_lower or "vscode" in cmd_lower) and ("notepad" not in cmd_lower)
+    editor_name = "VS Code" if use_vscode else "Notepad"
+
+    # Clean the task description for the Ollama prompt
+    clean_task = re.sub(r"\b(?:open\s+(?:the\s+)?(?:notepad|vs\s*code)\s+and\s+)", "", cmd_lower, flags=re.I)
+    clean_task = re.sub(r"\b(?:in|on|using|with)\s+(?:notepad|vs\s*code)\b", "", clean_task, flags=re.I).strip()
+    clean_task = re.sub(r"^(?:please\s+|can\s+you\s+|liku\s+)", "", clean_task, flags=re.I).strip()
+
+    if not clean_task or clean_task in {"write any program", "write a program", "write program", "write code"}:
+        clean_task = "a Python program with a complete working example, such as finding prime numbers or a guessing game"
+
+    speak(f"Sure! Writing your Python program in {editor_name}.")
+    print(f"[Code Request]: {clean_task} (Target: {editor_name})")
+
+    try:
+        model_to_use = OLLAMA_MODEL
+        try:
+            installed_models = [m.model for m in ollama.list().models]
+            if not any(model_to_use in m for m in installed_models) and installed_models:
+                model_to_use = installed_models[0]
+        except Exception:
+            pass
+
+        code_prompt = (
+            f"You are an expert Python programmer. Write complete, well-formatted, working Python code for: {clean_task}.\n"
+            "Requirements:\n"
+            "- Include clear comments explaining how it works.\n"
+            "- Include an example input and print statements displaying the output.\n"
+            "- Output ONLY valid Python code inside a ```python ``` block.\n"
+            "- Do not write conversational text outside the code block."
+        )
+
+        response = ollama.chat(
+            model=model_to_use,
+            messages=[{"role": "user", "content": code_prompt}],
+        )
+
+        raw_output = response["message"]["content"].strip()
+        code_text = extract_clean_code(raw_output)
+
+        if not code_text:
+            code_text = raw_output
+
+        # Generate a descriptive filename
+        words = re.findall(r"[a-zA-Z]+", clean_task)
+        stopwords = {"write", "a", "an", "the", "program", "python", "code", "script", "to", "for", "and", "in", "any", "of", "from", "given", "out", "find", "me"}
+        keywords = [w.lower() for w in words if w.lower() not in stopwords]
+        slug = "_".join(keywords[:3]) if keywords else "program"
+
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        os.makedirs(desktop, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"liku_{slug}_{timestamp}.py"
+        filepath = os.path.join(desktop, filename)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(code_text)
+
+        print(f"[Code saved]: {filepath}")
+
+        # Open in requested editor (Notepad is default!)
+        if use_vscode:
+            try:
+                subprocess.Popen(f'code "{filepath}"', shell=True)
+                speak(f"Done! I've written the program and opened it in VS Code for you.")
+            except Exception:
+                subprocess.Popen(["notepad.exe", filepath])
+                speak(f"Done! I've written the program and opened it in Notepad for you.")
+        else:
+            subprocess.Popen(["notepad.exe", filepath])
+            speak(f"Done! I've written the program and opened it in Notepad for you.")
+
+    except Exception as e:
+        error_msg = str(e).lower()
+        print(f"[Code writing error]: {e}")
+        if "connection" in error_msg or "refused" in error_msg:
+            speak("I can't reach Ollama. Please make sure Ollama is running.")
+        else:
+            speak("Sorry, I couldn't write the code. Make sure Ollama is running.")
+
+
+# =============================================================================
 # AI CHAT (Ollama with llama3.2:1b)
 # =============================================================================
 
@@ -1003,6 +1293,64 @@ def chat_with_ai(user_message):
                   "Make sure Ollama is running and the model is downloaded.")
 
 
+def chat_with_ai_multilang(user_message):
+    """
+    Like chat_with_ai but instructs the AI to reply in the current language.
+    Uses a language-aware system prompt so the AI responds in Hindi/Odia/English.
+    """
+    global chat_history
+
+    if ollama is None:
+        speak("The ollama package is not installed. Please run pip install ollama.")
+        return
+
+    # Build language-aware system prompt
+    if current_language == "hindi":
+        lang_instruction = (
+            "You are Liku, a friendly voice assistant. "
+            "Always reply in simple, spoken Hindi (Devanagari script or Roman transliteration is fine). "
+            "Keep replies to one to three short sentences, plain text only, no markdown."
+        )
+    elif current_language == "odia":
+        lang_instruction = (
+            "You are Liku, a friendly voice assistant. "
+            "Always reply in simple, spoken Odia (Roman transliteration is fine if Odia script is unavailable). "
+            "Keep replies to one to three short sentences, plain text only, no markdown."
+        )
+    else:
+        lang_instruction = SYSTEM_PROMPT
+
+    chat_history.append({"role": "user", "content": user_message})
+    if len(chat_history) > 12:
+        chat_history = chat_history[-12:]
+
+    messages = [{"role": "system", "content": lang_instruction}] + chat_history
+
+    try:
+        model_to_use = OLLAMA_MODEL
+        try:
+            installed_models = [m.model for m in ollama.list().models]
+            if not any(model_to_use in m for m in installed_models) and installed_models:
+                model_to_use = installed_models[0]
+        except Exception:
+            pass
+
+        response = ollama.chat(model=model_to_use, messages=messages)
+        reply = response["message"]["content"].strip()
+        chat_history.append({"role": "assistant", "content": reply})
+        speak(reply)
+
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "connection" in error_msg or "refused" in error_msg:
+            speak("I can't reach the Ollama server. Please make sure Ollama is running.")
+        elif "model" in error_msg and "not found" in error_msg:
+            speak(f"The model {OLLAMA_MODEL} is not downloaded yet. Please run ollama pull {OLLAMA_MODEL}")
+        else:
+            print(f"[AI chat error]: {e}")
+            speak("Sorry, something went wrong with the AI.")
+
+
 # =============================================================================
 # COMMAND ROUTER - The brain that decides what to do
 # =============================================================================
@@ -1026,36 +1374,49 @@ def process_command(command):
     quit_words = ["stop", "exit", "goodbye", "good bye", "bye", "quit",
                   "shut down assistant", "turn off"]
     if command in quit_words:
-        speak("Goodbye! Have a great day!")
+        speak(phrase("goodbye"))
         return False  # Signal to stop the main loop
 
-    # ----- 2. YOUTUBE -----
+    # ----- 2. LANGUAGE SWITCH -----
+    new_lang = detect_language_command(command)
+    if new_lang is not None:
+        global current_language
+        current_language = new_lang
+        speak(LANG_PHRASES[new_lang]["switched"])
+        return True
+
+    # ----- 3. CODE WRITING -----
+    if is_code_request(command):
+        write_code(command)
+        return True
+
+    # ----- 4. YOUTUBE -----
     if handle_youtube(command):
         return True
 
-    # ----- 3. VOLUME & MEDIA -----
+    # ----- 5. VOLUME & MEDIA -----
     if handle_media(command):
         return True
 
-    # ----- 4. SCREENSHOT -----
+    # ----- 6. SCREENSHOT -----
     if "screenshot" in command or "screen shot" in command:
         take_screenshot()
         return True
 
-    # ----- 5. LOCK COMPUTER -----
+    # ----- 7. LOCK COMPUTER -----
     if "lock" in command and ("computer" in command or "pc" in command
                               or "screen" in command or "system" in command):
         lock_computer()
         return True
 
-    # ----- 6. GOOGLE SEARCH -----
+    # ----- 8. GOOGLE SEARCH -----
     match = re.match(r"(?:search\s+google\s+for|google\s+search\s+for|"
                      r"search\s+for|google)\s+(.+)", command)
     if match:
         google_search(match.group(1).strip())
         return True
 
-    # ----- 7. DIRECT WEBSITE OR APP NAME (e.g. "youtube", "chrome", "vs code", "notepad") -----
+    # ----- 9. DIRECT WEBSITE OR APP NAME (e.g. "youtube", "chrome", "vs code", "notepad") -----
     site = find_website(command)
     if site and command in WEBSITES:
         url, matched_name = site
@@ -1069,7 +1430,7 @@ def process_command(command):
         open_app(matched_name)
         return True
 
-    # ----- 8. OPEN WEBSITE (WITH 'OPEN', 'GO TO', 'LAUNCH') -----
+    # ----- 10. OPEN WEBSITE (WITH 'OPEN', 'GO TO', 'LAUNCH') -----
     open_match = re.match(r"(?:open|go\s+to|visit|turn\s+on|launch|start|run)\s+(?:the\s+)?(.+)", command)
     if open_match:
         target = open_match.group(1).strip()
@@ -1080,19 +1441,19 @@ def process_command(command):
             open_url(url)
             return True
 
-    # ----- 9. CLOSE APP -----
+    # ----- 11. CLOSE APP -----
     close_match = re.match(r"(?:close|kill|shut\s+down|exit)\s+(.+)", command)
     if close_match:
         close_app(close_match.group(1).strip())
         return True
 
-    # ----- 10. OPEN APP (WITH 'OPEN', 'LAUNCH') -----
+    # ----- 12. OPEN APP (WITH 'OPEN', 'LAUNCH') -----
     if open_match:
         # We already checked websites above, so this is an app
         open_app(open_match.group(1).strip())
         return True
 
-    # ----- 10. TIME & DATE -----
+    # ----- 13. TIME & DATE -----
     if "time" in command and ("what" in command or "current" in command
                               or "tell" in command):
         get_time()
@@ -1103,9 +1464,9 @@ def process_command(command):
         get_date()
         return True
 
-    # ----- 11. AI CHAT (fallback) -----
-    # If nothing else matched, send it to the AI
-    chat_with_ai(command)
+    # ----- 14. AI CHAT (fallback) — language-aware -----
+    # If nothing else matched, send it to the AI (responds in the current language)
+    chat_with_ai_multilang(command)
     return True
 
 
@@ -1127,171 +1488,284 @@ def clear_audio_queue(audio_q, recog=None):
 # MAIN LOOP - Listens to the microphone and processes commands
 # =============================================================================
 
+def record_until_silence(samplerate=SAMPLE_RATE, silence_thresh=350,
+                         silence_duration=0.8, max_duration=15,
+                         listen_timeout=3.5, min_speech_duration=0.2):
+    """
+    Record audio from the microphone using sounddevice until silence is detected.
+    Uses Voice Activity Detection (VAD) with pre-roll buffering so speech
+    is captured cleanly without cutting off the beginning of words.
+
+    Args:
+        samplerate: Audio sample rate (Hz)
+        silence_thresh: RMS amplitude below which audio is considered silence
+        silence_duration: Seconds of silence after speech before stopping recording
+        max_duration: Maximum total recording duration in seconds
+        listen_timeout: Seconds to wait for speech to begin before returning None
+        min_speech_duration: Minimum seconds of speech to count as valid input
+
+    Returns:
+        bytes: Raw PCM audio data (16-bit mono), or None if no speech detected
+    """
+    import numpy as np
+    from collections import deque
+
+    pre_buffer = deque(maxlen=4)  # ~250ms of audio before speech starts
+    speech_chunks = []
+    speech_started = False
+    silence_counter = 0
+    speech_counter = 0
+    chunk_duration = BLOCK_SIZE / samplerate
+
+    def callback(indata, frames, time_info, status):
+        nonlocal speech_started, silence_counter, speech_counter
+        raw = bytes(indata)
+        audio_array = np.frombuffer(raw, dtype=np.int16)
+        rms = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2)) if len(audio_array) > 0 else 0
+
+        if not speech_started:
+            if rms > silence_thresh:
+                speech_started = True
+                speech_chunks.extend(list(pre_buffer))
+                speech_chunks.append(raw)
+                speech_counter = 1
+                silence_counter = 0
+            else:
+                pre_buffer.append(raw)
+        else:
+            speech_chunks.append(raw)
+            if rms < silence_thresh:
+                silence_counter += 1
+            else:
+                silence_counter = 0
+                speech_counter += 1
+
+    stream = sd.RawInputStream(
+        samplerate=samplerate,
+        blocksize=BLOCK_SIZE,
+        dtype="int16",
+        channels=CHANNELS,
+        callback=callback,
+    )
+
+    silence_blocks_needed = int(silence_duration / chunk_duration)
+    max_blocks = int(max_duration / chunk_duration)
+    listen_timeout_blocks = int(listen_timeout / chunk_duration)
+    min_speech_blocks = int(min_speech_duration / chunk_duration)
+
+    with stream:
+        block_count = 0
+        while block_count < max_blocks:
+            time.sleep(chunk_duration)
+            block_count += 1
+
+            # If no speech started within listen_timeout, exit early to cycle
+            if not speech_started and block_count >= listen_timeout_blocks:
+                break
+
+            # Stop when we have enough silence after speech
+            if speech_started and silence_counter >= silence_blocks_needed:
+                break
+
+    if not speech_started or speech_counter < min_speech_blocks:
+        return None  # No speech detected
+
+    return b"".join(speech_chunks)
+
+
+def recognize_speech_google(audio_bytes, language="en-IN"):
+    """
+    Send recorded audio to Google's free Speech Recognition API.
+
+    Args:
+        audio_bytes: Raw PCM audio data (16-bit mono, 16kHz)
+        language: Language code for recognition (e.g. 'en-IN', 'hi-IN', 'or-IN')
+
+    Returns:
+        Recognized text string, or None if recognition failed
+    """
+    if sr is None:
+        return None
+
+    # Create an AudioData object from raw PCM bytes
+    audio_data = sr.AudioData(audio_bytes, sample_rate=SAMPLE_RATE, sample_width=2)
+
+    recognizer = sr.Recognizer()
+    try:
+        text = recognizer.recognize_google(audio_data, language=language)
+        return text.strip() if text else None
+    except sr.UnknownValueError:
+        return None  # Google couldn't understand
+    except sr.RequestError as e:
+        print(f"[Google Speech error]: {e} — check internet connection")
+        return None
+
+
 def main():
     """
-    Main function: loads the Vosk model, opens the microphone,
-    and listens continuously for the wake word "Hey Liku" or direct commands.
+    Main function: sets up speech recognition and listens continuously
+    for the wake word "Hey Liku" or direct commands.
+
+    Uses Google's free Speech Recognition (same as Google Search voice input)
+    for high accuracy. Falls back to Vosk offline if no internet.
+    Microphone input uses sounddevice (no PyAudio needed).
     """
     global is_speaking
 
     # --- Check required libraries ---
-    if sd is None:
-        print("ERROR: 'sounddevice' is not installed. Run: pip install sounddevice")
-        sys.exit(1)
-    if Model is None:
-        print("ERROR: 'vosk' is not installed. Run: pip install vosk")
-        sys.exit(1)
     if pyttsx3 is None:
         print("ERROR: 'pyttsx3' is not installed. Run: pip install pyttsx3")
         sys.exit(1)
-
-    # --- Check for the Vosk model ---
-    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
-
-    if not os.path.exists(model_path):
-        print("=" * 60)
-        print("ERROR: Vosk model not found!")
-        print()
-        print("Please download the model:")
-        print("  1. Go to: https://alphacephei.com/vosk/models")
-        print("  2. Download: vosk-model-small-en-in-0.4")
-        print("  3. Extract the ZIP file")
-        print("  4. Rename the folder to 'model'")
-        print(f"  5. Place it here: {model_path}")
-        print("=" * 60)
+    if sd is None:
+        print("ERROR: 'sounddevice' is not installed. Run: pip install sounddevice")
         sys.exit(1)
 
-    # --- Load the model ---
-    print("Loading Vosk speech model... (this may take a moment)")
+    # =========================================================================
+    # SET UP SPEECH RECOGNITION
+    # =========================================================================
+
+    use_google = sr is not None
+    if use_google:
+        print("[OK] Using Google Speech Recognition (free, high accuracy)")
+        print("     Supports: English, Hindi, Odia")
+    else:
+        print("[i] SpeechRecognition not installed. Run: pip install SpeechRecognition")
+        print("    Using Vosk offline recognition.")
+
+    # --- Set up Vosk as offline fallback ---
+    vosk_recognizer = None
+    vosk_model_loaded = False
+
+    if not use_google:
+        if Model is None:
+            print("ERROR: 'vosk' is not installed. Run: pip install vosk")
+            sys.exit(1)
+
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
+
+        if not os.path.exists(model_path):
+            print("=" * 60)
+            print("ERROR: Vosk model not found!")
+            print()
+            print("Please download the model:")
+            print("  1. Go to: https://alphacephei.com/vosk/models")
+            print("  2. Download: vosk-model-small-en-in-0.4")
+            print("  3. Extract the ZIP file")
+            print("  4. Rename the folder to 'model'")
+            print(f"  5. Place it here: {model_path}")
+            print("=" * 60)
+            sys.exit(1)
+
+        print("Loading Vosk speech model... (this may take a moment)")
+        try:
+            vosk_model_obj = Model(model_path)
+            vosk_recognizer = KaldiRecognizer(vosk_model_obj, SAMPLE_RATE)
+            vosk_model_loaded = True
+        except Exception as e:
+            print(f"ERROR: Could not load Vosk model: {e}")
+            sys.exit(1)
+
+        print("Vosk model loaded successfully!")
+
+    # --- Test microphone ---
+    print("Testing microphone...")
     try:
-        model = Model(model_path)
-        recognizer = KaldiRecognizer(model, SAMPLE_RATE)
-    except Exception as e:
-        print(f"ERROR: Could not load Vosk model: {e}")
-        sys.exit(1)
-
-    print("Model loaded successfully!")
-
-    # --- Audio queue for thread-safe communication ---
-    audio_queue = queue.Queue()
-
-    def audio_callback(indata, frames, time_info, status):
-        """Called by sounddevice for each audio block."""
-        if status:
-            print(f"[Audio warning]: {status}")
-        # Only queue audio if Liku isn't speaking
-        if not is_speaking:
-            audio_queue.put(bytes(indata))
-
-    # --- Open the microphone ---
-    try:
-        stream = sd.RawInputStream(
+        test_stream = sd.RawInputStream(
             samplerate=SAMPLE_RATE,
             blocksize=BLOCK_SIZE,
             dtype="int16",
             channels=CHANNELS,
-            callback=audio_callback,
         )
+        test_stream.close()
+        print("[OK] Microphone is working!")
     except Exception as e:
         print(f"ERROR: Could not open microphone: {e}")
         print("Make sure a microphone is connected and not in use by another app.")
         sys.exit(1)
 
-    # --- Start listening ---
+    # =========================================================================
+    # BANNER
+    # =========================================================================
     print()
     print("=" * 60)
     print("  LIKU VOICE ASSISTANT")
+    if use_google:
+        print("  [Google Speech] Accurate voice recognition enabled!")
+    else:
+        print("  [Vosk Offline] Using offline recognition.")
     print("  Say 'Hey Liku' followed by your command!")
     print("  Say 'Hey Liku stop' to quit.")
     print("=" * 60)
     print()
 
-    speak("Hello! I'm Liku, your voice assistant. Say Hey Liku to wake me up!")
+    speak(phrase("hello"))
 
     running = True
 
-    with stream:
+    # =========================================================================
+    # GOOGLE SPEECH RECOGNITION LOOP (primary — accurate like Google Search)
+    # Uses sounddevice for audio capture (no PyAudio needed)
+    # =========================================================================
+    if use_google:
         while running:
             try:
-                # Get audio data from the queue (blocks until available)
-                data = audio_queue.get()
+                # Don't listen while Liku is speaking
+                if is_speaking:
+                    time.sleep(0.1)
+                    continue
 
-                # Feed audio to the recognizer
-                if recognizer.AcceptWaveform(data):
-                    result = json.loads(recognizer.Result())
-                    text = result.get("text", "").strip()
+                # Record audio until silence (using sounddevice)
+                audio_bytes = record_until_silence()
 
-                    if not text:
-                        continue
+                if audio_bytes is None:
+                    continue  # No speech detected, keep listening
 
-                    print(f"[Heard]: '{text}'")
+                # Recognize with Google (free — no API key needed)
+                lang_code = GOOGLE_LANG_CODES.get(current_language, "en-IN")
+                text = recognize_speech_google(audio_bytes, language=lang_code)
 
-                    # Check for the wake word
-                    wake_detected, remaining_command = check_wake_word(text)
+                if not text:
+                    continue
 
-                    if wake_detected:
-                        if remaining_command:
-                            # Command came with the wake word
-                            # e.g., "Hey Liku open vs code" or "Hey like open youtube"
-                            running = process_command(remaining_command)
-                            clear_audio_queue(audio_queue, recognizer)
+                print(f"[Heard]: '{text}'")
+
+                # Check for wake word
+                wake_detected, remaining_command = check_wake_word(text)
+
+                if wake_detected:
+                    if remaining_command:
+                        # Command came with wake word (e.g. "Hey Liku open YouTube")
+                        running = process_command(remaining_command)
+                    else:
+                        # Just wake word — wait for follow-up command
+                        speak(phrase("yes"))
+
+                        print("[Waiting for command...]")
+                        # Record follow-up with shorter timeout
+                        follow_audio = record_until_silence(max_duration=FOLLOW_UP_TIMEOUT)
+
+                        if follow_audio:
+                            follow_text = recognize_speech_google(follow_audio, language=lang_code)
+                            if follow_text:
+                                print(f"[Heard]: '{follow_text}'")
+                                running = process_command(follow_text)
+                            else:
+                                speak(phrase("no_command"))
                         else:
-                            # Just the wake word - wait for the command
-                            speak("Yes?")
-                            clear_audio_queue(audio_queue, recognizer)
+                            speak(phrase("no_command"))
 
-                            # Wait up to 8 seconds for a follow-up command
-                            print("[Waiting for command...]")
-                            start_time = time.time()
-                            got_command = False
-                            partial_text = ""
+                elif ALLOW_DIRECT_COMMANDS and is_direct_command(text):
+                    # Direct command without wake word (only if ALLOW_DIRECT_COMMANDS is enabled)
+                    print(f"[Direct command]: '{text}'")
+                    running = process_command(text)
 
-                            while time.time() - start_time < FOLLOW_UP_TIMEOUT:
-                                try:
-                                    audio_data = audio_queue.get(timeout=0.2)
-                                except queue.Empty:
-                                    continue
+                elif ALLOW_AI_WITHOUT_WAKE_WORD and len(text.split()) >= 2:
+                    # Direct AI question without wake word (only if enabled)
+                    print(f"[Direct AI Query]: '{text}'")
+                    running = process_command(text)
 
-                                if recognizer.AcceptWaveform(audio_data):
-                                    res = json.loads(recognizer.Result())
-                                    follow_up = res.get("text", "").strip()
-
-                                    if follow_up:
-                                        print(f"[Heard]: '{follow_up}'")
-                                        running = process_command(follow_up)
-                                        got_command = True
-                                        break
-                                else:
-                                    # Capture partial result in case silence endpoint doesn't trigger
-                                    part = json.loads(recognizer.PartialResult()).get("partial", "").strip()
-                                    if part:
-                                        partial_text = part
-
-                            if not got_command:
-                                # Check if speech was captured in FinalResult or partial
-                                final_res = json.loads(recognizer.FinalResult()).get("text", "").strip()
-                                fallback_cmd = final_res or partial_text
-                                if fallback_cmd:
-                                    print(f"[Heard (fallback)]: '{fallback_cmd}'")
-                                    running = process_command(fallback_cmd)
-                                    got_command = True
-                                else:
-                                    speak("I didn't hear a command. "
-                                          "Say Hey Liku again when you're ready.")
-
-                            clear_audio_queue(audio_queue, recognizer)
-
-                    elif ALLOW_DIRECT_COMMANDS and is_direct_command(text):
-                        # Direct command detected without wake word (e.g. "open youtube", "open vs code", "volume up")
-                        print(f"[Direct command]: '{text}'")
-                        running = process_command(text)
-                        clear_audio_queue(audio_queue, recognizer)
-
-                    elif ALLOW_AI_WITHOUT_WAKE_WORD and len(text.split()) >= 2:
-                        # Direct AI question or prompt without wake word
-                        print(f"[Direct AI Query]: '{text}'")
-                        running = process_command(text)
-                        clear_audio_queue(audio_queue, recognizer)
+                else:
+                    print(f"[Ignored - command must start with 'Hey Liku' or 'Liku']: '{text}'")
 
             except KeyboardInterrupt:
                 print("\nInterrupted by user.")
@@ -1299,8 +1773,109 @@ def main():
                 running = False
             except Exception as e:
                 print(f"[Error in main loop]: {e}")
-                # Don't crash - keep listening
                 continue
+
+    # =========================================================================
+    # VOSK OFFLINE FALLBACK LOOP (when Google is unavailable)
+    # =========================================================================
+    elif vosk_model_loaded:
+        audio_queue_vosk = queue.Queue()
+
+        def audio_callback(indata, frames, time_info, status):
+            """Called by sounddevice for each audio block."""
+            if status:
+                print(f"[Audio warning]: {status}")
+            if not is_speaking:
+                audio_queue_vosk.put(bytes(indata))
+
+        vosk_stream = sd.RawInputStream(
+            samplerate=SAMPLE_RATE,
+            blocksize=BLOCK_SIZE,
+            dtype="int16",
+            channels=CHANNELS,
+            callback=audio_callback,
+        )
+
+        with vosk_stream:
+            while running:
+                try:
+                    data = audio_queue_vosk.get()
+
+                    if vosk_recognizer.AcceptWaveform(data):
+                        result = json.loads(vosk_recognizer.Result())
+                        text = result.get("text", "").strip()
+
+                        if not text:
+                            continue
+
+                        print(f"[Heard]: '{text}'")
+
+                        wake_detected, remaining_command = check_wake_word(text)
+
+                        if wake_detected:
+                            if remaining_command:
+                                running = process_command(remaining_command)
+                                clear_audio_queue(audio_queue_vosk, vosk_recognizer)
+                            else:
+                                speak(phrase("yes"))
+                                clear_audio_queue(audio_queue_vosk, vosk_recognizer)
+
+                                print("[Waiting for command...]")
+                                start_time = time.time()
+                                got_command = False
+                                partial_text = ""
+
+                                while time.time() - start_time < FOLLOW_UP_TIMEOUT:
+                                    try:
+                                        audio_data = audio_queue_vosk.get(timeout=0.2)
+                                    except queue.Empty:
+                                        continue
+
+                                    if vosk_recognizer.AcceptWaveform(audio_data):
+                                        res = json.loads(vosk_recognizer.Result())
+                                        follow_up = res.get("text", "").strip()
+                                        if follow_up:
+                                            print(f"[Heard]: '{follow_up}'")
+                                            running = process_command(follow_up)
+                                            got_command = True
+                                            break
+                                    else:
+                                        part = json.loads(vosk_recognizer.PartialResult()).get("partial", "").strip()
+                                        if part:
+                                            partial_text = part
+
+                                if not got_command:
+                                    final_res = json.loads(vosk_recognizer.FinalResult()).get("text", "").strip()
+                                    fallback_cmd = final_res or partial_text
+                                    if fallback_cmd:
+                                        print(f"[Heard (fallback)]: '{fallback_cmd}'")
+                                        running = process_command(fallback_cmd)
+                                    else:
+                                        speak(phrase("no_command"))
+
+                                clear_audio_queue(audio_queue_vosk, vosk_recognizer)
+
+                        elif ALLOW_DIRECT_COMMANDS and is_direct_command(text):
+                            print(f"[Direct command]: '{text}'")
+                            running = process_command(text)
+                            clear_audio_queue(audio_queue_vosk, vosk_recognizer)
+
+                        elif ALLOW_AI_WITHOUT_WAKE_WORD and len(text.split()) >= 2:
+                            print(f"[Direct AI Query]: '{text}'")
+                            running = process_command(text)
+                            clear_audio_queue(audio_queue_vosk, vosk_recognizer)
+
+                        else:
+                            print(f"[Ignored - command must start with 'Hey Liku' or 'Liku']: '{text}'")
+                            clear_audio_queue(audio_queue_vosk, vosk_recognizer)
+
+                except KeyboardInterrupt:
+                    print("\nInterrupted by user.")
+                    speak("Goodbye!")
+                    running = False
+                except Exception as e:
+                    print(f"[Error in main loop]: {e}")
+                    continue
 
     print("Liku has stopped. See you next time!")
 
@@ -1311,3 +1886,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

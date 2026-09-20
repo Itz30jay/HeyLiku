@@ -6,3 +6,5 @@ ollama
 Pillow
 edge-tts
 pygame-ce
+SpeechRecognition
+numpy
