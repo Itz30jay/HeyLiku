@@ -1490,11 +1490,13 @@ def clear_audio_queue(audio_q, recog=None):
 
 def record_until_silence(samplerate=SAMPLE_RATE, silence_thresh=350,
                          silence_duration=0.8, max_duration=15,
-                         listen_timeout=3.5, min_speech_duration=0.2):
+                         listen_timeout=3.5, min_speech_duration=0.2,
+                         cancel_queue=None):
     """
     Record audio from the microphone using sounddevice until silence is detected.
     Uses Voice Activity Detection (VAD) with pre-roll buffering so speech
     is captured cleanly without cutting off the beginning of words.
+    If cancel_queue has pending items (e.g. text command), recording cancels immediately.
 
     Args:
         samplerate: Audio sample rate (Hz)
@@ -1503,6 +1505,7 @@ def record_until_silence(samplerate=SAMPLE_RATE, silence_thresh=350,
         max_duration: Maximum total recording duration in seconds
         listen_timeout: Seconds to wait for speech to begin before returning None
         min_speech_duration: Minimum seconds of speech to count as valid input
+        cancel_queue: Optional queue; if not empty, recording cancels immediately
 
     Returns:
         bytes: Raw PCM audio data (16-bit mono), or None if no speech detected
@@ -1556,6 +1559,10 @@ def record_until_silence(samplerate=SAMPLE_RATE, silence_thresh=350,
     with stream:
         block_count = 0
         while block_count < max_blocks:
+            # If a text command arrived, cancel listening immediately
+            if cancel_queue is not None and not cancel_queue.empty():
+                return None
+
             time.sleep(chunk_duration)
             block_count += 1
 
@@ -1599,6 +1606,25 @@ def recognize_speech_google(audio_bytes, language="en-IN"):
     except sr.RequestError as e:
         print(f"[Google Speech error]: {e} — check internet connection")
         return None
+
+
+def check_file_commands(cmd_queue):
+    """
+    Check if a 'commands.txt' file exists in the Liku folder.
+    If commands are found, enqueues them as text commands and clears the file.
+    This allows users or external scripts to feed text commands to Liku.
+    """
+    cmd_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "commands.txt")
+    if os.path.exists(cmd_file):
+        try:
+            with open(cmd_file, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+            if lines:
+                open(cmd_file, "w", encoding="utf-8").close()
+                for line in lines:
+                    cmd_queue.put(("text", line))
+        except Exception:
+            pass
 
 
 def main():
@@ -1684,38 +1710,93 @@ def main():
         sys.exit(1)
 
     # =========================================================================
+    # DUAL INPUT SETUP (Voice + Text)
+    # =========================================================================
+    command_queue = queue.Queue()
+    running = [True]
+
+    # 1. CLI Argument Support: e.g. python liku.py "open notepad and write code..."
+    if len(sys.argv) > 1:
+        initial_cmd = " ".join(sys.argv[1:]).strip()
+        if initial_cmd:
+            command_queue.put(("text", initial_cmd))
+
+    # 2. Background Thread for Live Console Text Input:
+    # Users can type commands in the terminal at any time and press Enter!
+    def text_input_worker():
+        while running[0]:
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    time.sleep(0.2)
+                    continue
+                line = line.strip()
+                if line:
+                    command_queue.put(("text", line))
+            except (EOFError, KeyboardInterrupt):
+                break
+            except Exception:
+                time.sleep(0.5)
+
+    text_thread = threading.Thread(target=text_input_worker, daemon=True)
+    text_thread.start()
+
+    def handle_text_command(cmd_text):
+        """Execute a text command. Strips wake word if present, otherwise runs directly."""
+        print(f"\n[Text Command]: '{cmd_text}'")
+        wake_detected, remaining = check_wake_word(cmd_text)
+        actual_cmd = remaining if wake_detected and remaining else cmd_text
+        return process_command(actual_cmd)
+
+    # =========================================================================
     # BANNER
     # =========================================================================
     print()
     print("=" * 60)
-    print("  LIKU VOICE ASSISTANT")
+    print("  LIKU ASSISTANT (Voice + Text)")
     if use_google:
-        print("  [Google Speech] Accurate voice recognition enabled!")
+        print("  [Voice Mode] Google Speech Recognition enabled (en-IN, hi-IN, or-IN)")
     else:
-        print("  [Vosk Offline] Using offline recognition.")
-    print("  Say 'Hey Liku' followed by your command!")
-    print("  Say 'Hey Liku stop' to quit.")
+        print("  [Voice Mode] Vosk offline recognition active.")
+    print("  [Text Mode]  Type any command in this window & press Enter!")
+    print("  [File Mode]  Or write commands into 'commands.txt'")
+    print("  Say 'Hey Liku' or type 'exit' to quit.")
     print("=" * 60)
     print()
 
     speak(phrase("hello"))
 
-    running = True
-
     # =========================================================================
     # GOOGLE SPEECH RECOGNITION LOOP (primary — accurate like Google Search)
-    # Uses sounddevice for audio capture (no PyAudio needed)
+    # Uses sounddevice for audio capture + simultaneous text input support
     # =========================================================================
     if use_google:
-        while running:
+        while running[0]:
             try:
+                # Check for file-based text commands in commands.txt
+                check_file_commands(command_queue)
+
+                # Process any pending text commands immediately
+                while not command_queue.empty():
+                    source, text_cmd = command_queue.get_nowait()
+                    if source == "text":
+                        running[0] = handle_text_command(text_cmd)
+                        if not running[0]:
+                            break
+                if not running[0]:
+                    break
+
                 # Don't listen while Liku is speaking
                 if is_speaking:
                     time.sleep(0.1)
                     continue
 
-                # Record audio until silence (using sounddevice)
-                audio_bytes = record_until_silence()
+                # Record audio until silence (cancels immediately if text is typed)
+                audio_bytes = record_until_silence(cancel_queue=command_queue)
+
+                # If text command arrived during audio recording, loop back immediately
+                if not command_queue.empty():
+                    continue
 
                 if audio_bytes is None:
                     continue  # No speech detected, keep listening
@@ -1734,35 +1815,32 @@ def main():
 
                 if wake_detected:
                     if remaining_command:
-                        # Command came with wake word (e.g. "Hey Liku open YouTube")
-                        running = process_command(remaining_command)
+                        running[0] = process_command(remaining_command)
                     else:
-                        # Just wake word — wait for follow-up command
                         speak(phrase("yes"))
 
                         print("[Waiting for command...]")
-                        # Record follow-up with shorter timeout
-                        follow_audio = record_until_silence(max_duration=FOLLOW_UP_TIMEOUT)
+                        follow_audio = record_until_silence(max_duration=FOLLOW_UP_TIMEOUT, cancel_queue=command_queue)
+                        if not command_queue.empty():
+                            continue
 
                         if follow_audio:
                             follow_text = recognize_speech_google(follow_audio, language=lang_code)
                             if follow_text:
                                 print(f"[Heard]: '{follow_text}'")
-                                running = process_command(follow_text)
+                                running[0] = process_command(follow_text)
                             else:
                                 speak(phrase("no_command"))
                         else:
                             speak(phrase("no_command"))
 
                 elif ALLOW_DIRECT_COMMANDS and is_direct_command(text):
-                    # Direct command without wake word (only if ALLOW_DIRECT_COMMANDS is enabled)
                     print(f"[Direct command]: '{text}'")
-                    running = process_command(text)
+                    running[0] = process_command(text)
 
                 elif ALLOW_AI_WITHOUT_WAKE_WORD and len(text.split()) >= 2:
-                    # Direct AI question without wake word (only if enabled)
                     print(f"[Direct AI Query]: '{text}'")
-                    running = process_command(text)
+                    running[0] = process_command(text)
 
                 else:
                     print(f"[Ignored - command must start with 'Hey Liku' or 'Liku']: '{text}'")
@@ -1770,7 +1848,7 @@ def main():
             except KeyboardInterrupt:
                 print("\nInterrupted by user.")
                 speak("Goodbye!")
-                running = False
+                running[0] = False
             except Exception as e:
                 print(f"[Error in main loop]: {e}")
                 continue
@@ -1797,9 +1875,25 @@ def main():
         )
 
         with vosk_stream:
-            while running:
+            while running[0]:
                 try:
-                    data = audio_queue_vosk.get()
+                    # Check for file-based text commands
+                    check_file_commands(command_queue)
+
+                    # Process any pending text commands
+                    while not command_queue.empty():
+                        source, text_cmd = command_queue.get_nowait()
+                        if source == "text":
+                            running[0] = handle_text_command(text_cmd)
+                            if not running[0]:
+                                break
+                    if not running[0]:
+                        break
+
+                    try:
+                        data = audio_queue_vosk.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
 
                     if vosk_recognizer.AcceptWaveform(data):
                         result = json.loads(vosk_recognizer.Result())
@@ -1814,7 +1908,7 @@ def main():
 
                         if wake_detected:
                             if remaining_command:
-                                running = process_command(remaining_command)
+                                running[0] = process_command(remaining_command)
                                 clear_audio_queue(audio_queue_vosk, vosk_recognizer)
                             else:
                                 speak(phrase("yes"))
@@ -1836,7 +1930,7 @@ def main():
                                         follow_up = res.get("text", "").strip()
                                         if follow_up:
                                             print(f"[Heard]: '{follow_up}'")
-                                            running = process_command(follow_up)
+                                            running[0] = process_command(follow_up)
                                             got_command = True
                                             break
                                     else:
@@ -1849,7 +1943,7 @@ def main():
                                     fallback_cmd = final_res or partial_text
                                     if fallback_cmd:
                                         print(f"[Heard (fallback)]: '{fallback_cmd}'")
-                                        running = process_command(fallback_cmd)
+                                        running[0] = process_command(fallback_cmd)
                                     else:
                                         speak(phrase("no_command"))
 
@@ -1857,12 +1951,12 @@ def main():
 
                         elif ALLOW_DIRECT_COMMANDS and is_direct_command(text):
                             print(f"[Direct command]: '{text}'")
-                            running = process_command(text)
+                            running[0] = process_command(text)
                             clear_audio_queue(audio_queue_vosk, vosk_recognizer)
 
                         elif ALLOW_AI_WITHOUT_WAKE_WORD and len(text.split()) >= 2:
                             print(f"[Direct AI Query]: '{text}'")
-                            running = process_command(text)
+                            running[0] = process_command(text)
                             clear_audio_queue(audio_queue_vosk, vosk_recognizer)
 
                         else:
@@ -1872,7 +1966,7 @@ def main():
                 except KeyboardInterrupt:
                     print("\nInterrupted by user.")
                     speak("Goodbye!")
-                    running = False
+                    running[0] = False
                 except Exception as e:
                     print(f"[Error in main loop]: {e}")
                     continue
